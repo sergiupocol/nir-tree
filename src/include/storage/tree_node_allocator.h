@@ -157,7 +157,7 @@ public:
     inline uint16_t get_offset() {
         return page_location_.value().offset_;
     }
-    
+
     inline uint16_t get_type() {
         return type_;
     }
@@ -206,6 +206,54 @@ public:
         return buffer_pool_.get_backing_file_name();
     }
 
+    void dump_free_list() const {
+        for (auto it : free_list_) {
+            std::cerr << "(" << it.first << ", " << it.second << ")" << " -> ";
+        }
+        std::cerr << "NULL" << std::endl;
+    }
+
+    // Primarily used by unit tests
+    size_t get_free_list_length() const {
+        return free_list_.size();
+    }
+
+    void insert_to_free_list(std::pair<tree_node_handle,uint16_t> free_block) {
+        // First, check if we can merge this block with an already freed one
+        // If we can, modify an entry in the list
+        // Otherwise iter will point to the node after which we must insert
+        auto iter = free_list_.begin();
+        for(; iter != free_list_.end(); iter++ ) {
+            auto &free_location = *iter;
+            assert(free_location.first);
+
+            if (free_location.first.get_page_id() == free_block.first.get_page_id()) {
+                // On the same page!
+                // Now check if the offsets are aligned such that
+                // fre_block lies adjacent to free_location
+                uint16_t free_block_start = free_block.first.get_offset();
+                uint16_t free_block_end = free_block_start + free_block.second;
+                uint16_t free_location_start = free_location.first.get_offset();
+                uint16_t free_location_end = free_location_start + free_location.second;
+
+                if (free_block_end == free_location_start) {
+                    free_location.first = free_block.first;
+                    free_location.second += free_block.second;
+                    return;
+                } else if (free_location_end == free_block_start) {
+                    free_location.second += free_block.second;
+                    return;
+                }
+            } else if (free_location.first.get_page_id() > free_block.first.get_page_id()) {
+                // Too far!
+                break;
+            }
+        }
+
+        // Since we reached this point, free_block will be a standalone entry in the free_list
+        free_list_.insert(iter, free_block);
+    }
+
     template <typename T>
     std::pair<pinned_node_ptr<T>, tree_node_handle>
     create_new_tree_node( NodeHandleType type_code = NodeHandleType(0) ) {
@@ -245,7 +293,7 @@ public:
                 tree_node_handle split_handle(
                         alloc_location.first.get_page_id(), new_offset,
                         type_code );
-                free_list_.push_back( std::make_pair( split_handle,
+                insert_to_free_list( std::make_pair( split_handle,
                             remainder ) );
             }
 
@@ -281,7 +329,7 @@ public:
             assert( alloc_size == 1840 );
         }
 #endif
-        free_list_.push_back( std::make_pair( handle, alloc_size ) );
+        insert_to_free_list( std::make_pair( handle, alloc_size ) );
     }
 
     template <typename T>
