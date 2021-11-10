@@ -65,8 +65,7 @@ TEST_CASE( "Tree Node Allocator : Free Consecutive RStar TreeNodes" ) {
     REQUIRE( alloc_data_four.second.get_page_id() == 0 );
     REQUIRE( alloc_data_four.second.get_offset() == 0 );
 
-    // Memory lost because remainder is less than 272
-    REQUIRE(allocator.get_free_list_length() == 0);
+    REQUIRE(allocator.get_free_list_length() == 1);
 }
 
 TEST_CASE( "Tree Node Allocator : Free Consecutive RStar TreeNodes with Large Remainder" ) {
@@ -75,7 +74,7 @@ TEST_CASE( "Tree Node Allocator : Free Consecutive RStar TreeNodes with Large Re
     unlink( allocator.get_backing_file_name().c_str() );
     allocator.initialize();
 
-    int num_nodes = ceil(272 / sizeof(rstartree::Node)) + 2;
+    int num_nodes = (PAGE_DATA_SIZE / sizeof(rstartree::Node));
     std::vector<std::pair<pinned_node_ptr<rstartree::Node>, tree_node_handle>> allocs;
     for (int i = 0; i < num_nodes; i++) {
         std::pair<pinned_node_ptr<rstartree::Node>, tree_node_handle> alloc_data =
@@ -142,7 +141,7 @@ TEST_CASE( "Tree Node Allocator : Free Non-Consecutive RStar TreeNodes" ) {
     REQUIRE( alloc_data.second.get_page_id() == 0 );
     REQUIRE( alloc_data.second.get_offset() == 0 );
 
-    REQUIRE(allocator.get_free_list_length() == 2);
+    REQUIRE(allocator.get_free_list_length() == 3);
 }
 
 TEST_CASE( "Tree Node Allocator : Free Remainder of Page During Allocation" ) {
@@ -151,27 +150,17 @@ TEST_CASE( "Tree Node Allocator : Free Remainder of Page During Allocation" ) {
     unlink( allocator.get_backing_file_name().c_str() );
     allocator.initialize();
 
-    int num_nodes = floor((PAGE_DATA_SIZE - 272) / sizeof(rstartree::Node));
-    std::vector<std::pair<pinned_node_ptr<rstartree::Node>, tree_node_handle>> allocs;
-    for (int i = 0; i < num_nodes; i++) {
-        std::pair<pinned_node_ptr<rstartree::Node>, tree_node_handle> alloc_data =
-            allocator.create_new_tree_node<rstartree::Node>();
-
-        allocs.emplace_back(alloc_data);
-    }
+    // Remainder is 1
+    auto alloc_data_less_than_page = allocator.create_new_tree_node<InlineUnboundedIsotheticPolygon>(
+            PAGE_DATA_SIZE - 1, NodeHandleType( 0 ) );
 
     REQUIRE(allocator.get_free_list_length() == 0);
-    // Allocate something bigger than 272
     auto alloc_data_huge = allocator.create_new_tree_node<InlineUnboundedIsotheticPolygon>(
             PAGE_DATA_SIZE, NodeHandleType( 0 ) );
-    // It should be on a new page
     REQUIRE(allocator.get_free_list_length() == 1);
 
-    for (int i = 0; i < num_nodes; i++) {
-        auto &alloc_data = allocs.at(i);
-        allocator.free(alloc_data.second, sizeof(rstartree::Node));
-        REQUIRE(allocator.get_free_list_length() == 2);
-    }
+    allocator.free(alloc_data_less_than_page.second, sizeof(rstartree::Node));
+    REQUIRE(allocator.get_free_list_length() == 2);
 
     allocator.free(alloc_data_huge.second, PAGE_DATA_SIZE);
 }

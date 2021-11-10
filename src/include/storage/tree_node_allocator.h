@@ -236,6 +236,8 @@ public:
                 uint16_t free_location_start = free_location.first.get_offset();
                 uint16_t free_location_end = free_location_start + free_location.second;
 
+                assert(free_block_start >= free_location_end || free_location_start >= free_block_end);
+
                 if (free_block_end == free_location_start) {
                     free_location.first = free_block.first;
                     free_location.second += free_block.second;
@@ -287,7 +289,7 @@ public:
             // Can't use that symbol here because it would be recursive
             // includes. So instead I static assert it in that file and
             // use the constant here.
-            if( remainder >= 272 ) {
+            if( remainder > 0 ) {
                 uint16_t new_offset = alloc_location.first.get_offset() +
                     node_size;
                 tree_node_handle split_handle(
