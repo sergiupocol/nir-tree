@@ -157,7 +157,7 @@ public:
     inline uint16_t get_offset() {
         return page_location_.value().offset_;
     }
-
+    
     inline uint16_t get_type() {
         return type_;
     }
@@ -194,36 +194,42 @@ pinned_node_ptr<U> reinterpret_handle_ptr( const pinned_node_ptr<T> &ptr )
 static_assert( std::is_trivially_copyable<tree_node_handle>::value );
 
 class tree_node_allocator {
-public:
-    tree_node_allocator( size_t memory_budget,
-            std::string backing_file );
+    class free_list {
+    private:
+        typedef std::pair<tree_node_handle,uint16_t> allocation;
+        std::vector<allocation> allocs_sorted_by_pageid_;
+        std::vector<int> indices_sorted_by_size_;
 
-    inline void initialize() {
-        buffer_pool_.initialize();
-    }
+        void remove_from_free_list(int idx_into_sorted_by_size)  {
+            int sorted_by_page_idx = indices_sorted_by_size_.at(idx_into_sorted_by_size);
 
-    inline std::string get_backing_file_name() {
-        return buffer_pool_.get_backing_file_name();
-    }
-
-    void dump_free_list() const {
-        for (auto it : free_list_) {
-            std::cerr << "(" << it.first << ", " << it.second << ")" << " -> ";
+            allocs_sorted_by_pageid_.erase(allocs_sorted_by_pageid_.begin() + sorted_by_page_idx);
+            indices_sorted_by_size_.erase(indices_sorted_by_size_.begin() + idx_into_sorted_by_size);
         }
-        std::cerr << "NULL" << std::endl;
-    }
 
-    // Primarily used by unit tests
-    size_t get_free_list_length() const {
-        return free_list_.size();
-    }
 
-    void insert_to_free_list(std::pair<tree_node_handle,uint16_t> free_block) {
-        // First, check if we can merge this block with an already freed one
-        // If we can, modify an entry in the list
-        // Otherwise iter will point to the node after which we must insert
-        auto iter = free_list_.begin();
-        for(; iter != free_list_.end(); iter++ ) {
+    public:
+
+        void insert_to_free_list(std::pair<tree_node_handle,uint16_t> free_block) {
+            // First, check if we can merge this block with an already freed one
+            // If we can, modify an entry in the list
+            // Otherwise iter will point to the node after which we must insert
+            if (!free_block.first) return;
+            if (get_free_list_length() == 0) {
+                allocs_sorted_by_pageid_.insert(allocs_sorted_by_pageid_.begin(), free_block);
+                indices_sorted_by_size_.push_back(0);
+                return;
+            }
+            auto iter = std::upper_bound(allocs_sorted_by_pageid_.begin(), allocs_sorted_by_pageid_.end(), free_block,
+            [](std::pair<tree_node_handle,uint16_t> lhs, std::pair<tree_node_handle,uint16_t> rhs) -> bool {
+                return lhs.first.get_page_id() <= rhs.first.get_page_id();
+            });
+            if (iter == allocs_sorted_by_pageid_.end()) {
+                allocs_sorted_by_pageid_.push_back(free_block);
+                indices_sorted_by_size_.push_back(allocs_sorted_by_pageid_.size() - 1);
+                return;
+            }
+
             auto &free_location = *iter;
             assert(free_location.first);
 
@@ -236,8 +242,6 @@ public:
                 uint16_t free_location_start = free_location.first.get_offset();
                 uint16_t free_location_end = free_location_start + free_location.second;
 
-                assert(free_block_start >= free_location_end || free_location_start >= free_block_end);
-
                 if (free_block_end == free_location_start) {
                     free_location.first = free_block.first;
                     free_location.second += free_block.second;
@@ -246,14 +250,68 @@ public:
                     free_location.second += free_block.second;
                     return;
                 }
-            } else if (free_location.first.get_page_id() > free_block.first.get_page_id()) {
-                // Too far!
-                break;
+            }
+
+            // Since we reached this point, free_block will be a standalone entry in the free_list
+            auto new_iter = allocs_sorted_by_pageid_.insert(iter, free_block);
+            int insert_idx = new_iter - allocs_sorted_by_pageid_.begin();
+
+            auto pos_iter = std::upper_bound(indices_sorted_by_size_.begin(), indices_sorted_by_size_.end(), insert_idx,
+            [this](int lhs, int rhs) {
+                assert(size_t(lhs) <= allocs_sorted_by_pageid_.size());
+                return allocs_sorted_by_pageid_.at(lhs).second < allocs_sorted_by_pageid_.at(rhs).second;
+            });
+
+            indices_sorted_by_size_.insert(pos_iter, insert_idx);
+            int size_insert_idx = indices_sorted_by_size_.begin() - pos_iter;
+            allocs_sorted_by_pageid_.at(insert_idx).second = size_insert_idx;
+        }
+
+        allocation search(uint16_t node_size) {
+            // Check the first element of the sorted by size array
+            size_t len = get_free_list_length();
+            if (len == 0) {
+                return std::make_pair(tree_node_handle(), 0);
+            }
+            int largest_alloc_idx = indices_sorted_by_size_.at(len - 1));
+            allocation largest_alloc = allocs_sorted_by_pageid_.at(largest_alloc_idx);
+            if (largest_alloc.second >= node_size) {
+                // We found a match!
+                // Remove from the free list and return
+                remove_from_free_list(largest_alloc_idx);
+                return largest_alloc;
+            } else {
+                return std::make_pair(tree_node_handle(), 0);
             }
         }
 
-        // Since we reached this point, free_block will be a standalone entry in the free_list
-        free_list_.insert(iter, free_block);
+        size_t get_free_list_length() {
+            assert(allocs_sorted_by_pageid_.size() == indices_sorted_by_size_.size());
+            return indices_sorted_by_size_.size();
+        }
+
+        void dump_free_list() const {
+            for (auto it : allocs_sorted_by_pageid_) {
+                std::cerr << "(" << it.first << ", " << it.second << ")" << " -> ";
+            }
+            std::cerr << "NULL" << std::endl;
+            for (auto it : indices_sorted_by_size_) {
+                std::cerr << it << " -> ";
+            }
+            std::cerr << "NULL" << std::endl;
+        }
+
+    };
+public:
+    tree_node_allocator( size_t memory_budget,
+            std::string backing_file );
+
+    inline void initialize() {
+        buffer_pool_.initialize();
+    }
+
+    inline std::string get_backing_file_name() {
+        return buffer_pool_.get_backing_file_name();
     }
 
     template <typename T>
@@ -262,22 +320,28 @@ public:
         return create_new_tree_node<T>( sizeof( T ), type_code );
     }
 
+    size_t get_free_list_length() {
+        return free_list_.get_free_list_length();
+    }
+
+    void dump_free_list() {
+        free_list_.dump_free_list();
+    }
+
     template <typename T>
     std::pair<pinned_node_ptr<T>, tree_node_handle>
     create_new_tree_node( uint16_t node_size, NodeHandleType type_code ) {
         assert( node_size <= PAGE_DATA_SIZE );
 
-        for( auto iter = free_list_.begin(); iter != free_list_.end();
-                iter++ ) {
-            auto alloc_location = *iter;
-            if( alloc_location.second < node_size ) {
-                continue;
-            }
+        auto alloc_location_from_free_list = free_list_.search(node_size);
+
+        if (alloc_location_from_free_list.second > 0) {
+            auto alloc_location = alloc_location_from_free_list;
+            assert( alloc_location.second < node_size );
 
             alloc_location.first.set_type( type_code );
 
             size_t remainder = alloc_location.second - node_size;
-            free_list_.erase( iter );
             page *page_ptr = buffer_pool_.get_page(
                 alloc_location.first.get_page_id() );
             T *obj_ptr = (T *) (page_ptr->data_ +
@@ -295,13 +359,11 @@ public:
                 tree_node_handle split_handle(
                         alloc_location.first.get_page_id(), new_offset,
                         type_code );
-                insert_to_free_list( std::make_pair( split_handle,
-                            remainder ) );
+                free_list_.insert_to_free_list( std::make_pair( split_handle, remainder ) );
             }
 
             return std::make_pair( pinned_node_ptr( buffer_pool_,
                         obj_ptr, page_ptr ), alloc_location.first );
-
 
         }
 
@@ -331,20 +393,13 @@ public:
             assert( alloc_size == 1840 );
         }
 #endif
-        insert_to_free_list( std::make_pair( handle, alloc_size ) );
+        if (handle) {
+            free_list_.insert_to_free_list( std::make_pair( handle, alloc_size ) );
+        }
     }
 
     template <typename T>
     pinned_node_ptr<T> get_tree_node( tree_node_handle node_ptr ) {
-#ifndef NDEBUG
-        for( const auto &entry : free_list_ ) {
-            if( entry.first == node_ptr ) {
-                std::cout << "Using freed pointer: " << node_ptr <<
-                    std::endl;
-            }
-            assert( entry.first != node_ptr );
-        }
-#endif
         page *page_ptr = buffer_pool_.get_page( node_ptr.get_page_id() );
         assert( page_ptr != nullptr );
         T *obj_ptr = (T *) (page_ptr->data_ + node_ptr.get_offset() );
@@ -358,5 +413,5 @@ protected:
 
     uint16_t space_left_in_cur_page_;
     uint32_t cur_page_;
-    std::list<std::pair<tree_node_handle,uint16_t>> free_list_;
+    free_list free_list_;
 };

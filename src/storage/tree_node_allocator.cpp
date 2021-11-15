@@ -25,10 +25,13 @@ page *tree_node_allocator::get_page_to_alloc_on( uint16_t object_size ) {
     } else {
         size_t remainder = space_left_in_cur_page_;
 
+        if (remainder > 0) {
+
         uint16_t offset_into_page = (PAGE_DATA_SIZE - space_left_in_cur_page_);
         tree_node_handle split_handle(
                 cur_page_, offset_into_page, NodeHandleType(0) );
-        insert_to_free_list( std::make_pair( split_handle, remainder ) );
+        free_list_.insert_to_free_list( std::make_pair( split_handle, remainder ) );
+        }
     }
 
     cur_page_++;
