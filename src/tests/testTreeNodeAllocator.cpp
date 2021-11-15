@@ -176,8 +176,6 @@ TEST_CASE( "Tree Node Allocator : Free Non-Consecutive RStar TreeNodes" ) {
         REQUIRE(allocator.get_free_list_length() == 3);
     }
 
-    //allocator.dump_free_list();
-
     std::pair<pinned_node_ptr<rstartree::Node>, tree_node_handle> alloc_data =
         allocator.create_new_tree_node<rstartree::Node>();
 
@@ -194,7 +192,7 @@ TEST_CASE( "Tree Node Allocator : Benchmark Allocations" ) {
     unlink( allocator.get_backing_file_name().c_str() );
     allocator.initialize();
 
-    int num_nodes = (PAGE_SIZE / sizeof(rstartree::Node));
+    int num_nodes = ( (1000*PAGE_SIZE) / sizeof(rstartree::Node));
 
     Timer t1;
     Timer t2;
@@ -210,7 +208,6 @@ TEST_CASE( "Tree Node Allocator : Benchmark Allocations" ) {
     for (int i = 0; i < num_nodes; i++) {
         auto &alloc_data = allocs.at(i);
         allocator.free(alloc_data.second, sizeof(rstartree::Node));
-        allocator.dump_free_list();
     }
     t2.stop();
     std::cerr << "Free time " << t2.elapsedMilliseconds() << std::endl;
