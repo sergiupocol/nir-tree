@@ -222,6 +222,7 @@ public:
         // First, check if we can merge this block with an already freed one
         // If we can, modify an entry in the list
         // Otherwise iter will point to the node after which we must insert
+        uint16_t initial_size = validate_free_list();
         if (!free_block.first) return;
         if (get_free_list_length() == 0) {
             free_list_.push_back(free_block);
@@ -234,7 +235,7 @@ public:
                 uint16_t lhs_end = lhs_start + lhs.second;
                 uint16_t rhs_start = rhs.first.get_offset();
                 uint16_t rhs_end = rhs_start + rhs.second;
-                bool match = (rhs_end == lhs_start);
+                bool match = (rhs_end == lhs_start || lhs_end == rhs_start);
                 return match || lhs.first.get_offset() < rhs.first.get_offset();
             }
             return lhs.first.get_page_id() < rhs.first.get_page_id();
@@ -247,7 +248,7 @@ public:
         auto &free_location = *iter;
         assert(free_location.first);
 
-        if (free_location.first.get_page_id() == free_block.first.get_page_id()) {
+        if (free_location.first.get_page_id() == free_block.first.get_page_id() && iter->first) {
             // On the same page!
             // Now check if the offsets are aligned such that
             // fre_block lies adjacent to free_location
@@ -255,19 +256,46 @@ public:
             uint16_t free_block_end = free_block_start + free_block.second;
             uint16_t free_location_start = free_location.first.get_offset();
             uint16_t free_location_end = free_location_start + free_location.second;
+            assert(free_block_end <= free_location_start || free_location_end <= free_block_start);
 
             if (free_block_end == free_location_start) {
                 free_location.first = free_block.first;
                 free_location.second += free_block.second;
+                // Since we just modified this node by increasing it towards iter--, let's check if a merge is possible
+                auto predecessor_iter = iter;
+                predecessor_iter--;
+                if ( iter != free_list_.begin() ) {
+                    auto &predecessor = *predecessor_iter;
+                    if (predecessor.first.get_page_id() != free_location.first.get_page_id()) return;
+                    uint16_t predecessor_end = predecessor.first.get_offset() + predecessor.second;
+                    if (predecessor_end != free_location.first) return;
+                    predecessor.second += free_location.second;
+                    free_list_.erase(iter);
+                    return;
+                }
                 return;
             } else if (free_location_end == free_block_start) {
                 free_location.second += free_block.second;
+
+                auto descendant_iter = iter;
+                descendant_iter++;
+                if ( descendant_iter != free_list_.end() ) {
+                    auto &descendant = *descendant_iter;
+                    if (descendant.first.get_page_id() != free_location.first.get_page_id()) return;
+                    uint16_t descendant_start = descendant.first.get_offset();
+                    if (descendant_start != free_location.first.get_offset() + free_location.second) return;
+                    free_location.second += descendant.second;
+                    free_list_.erase(descendant_iter);
+                    return;
+                }
                 return;
             }
         }
 
         // Since we reached this point, free_block will be a standalone entry in the free_list
         free_list_.insert(iter, free_block);
+        uint16_t final_size = validate_free_list();
+        assert(initial_size + free_block.second == final_size);
     }
 
     template <typename T>
@@ -276,11 +304,58 @@ public:
         return create_new_tree_node<T>( sizeof( T ), type_code );
     }
 
+    int validate_free_list() const {
+        uint16_t total_size = 0;
+#ifndef NDEBUG
+        if (get_free_list_length() == 0) return 0;
+
+        auto it = free_list_.begin();
+        auto lhs = *it;
+        total_size += lhs.second;
+        auto rhs = *(++it);
+        bool fail = false;
+        try
+        {
+            while (it != free_list_.end()) {
+                total_size += it->second;
+                if (!(lhs.first.get_offset() <= PAGE_DATA_SIZE)) { fail = true; break; }
+                if (!(rhs.first.get_offset() <= PAGE_DATA_SIZE)) { fail = true; break; }
+                assert(lhs.first.get_offset() <= PAGE_DATA_SIZE);
+                assert(rhs.first.get_offset() <= PAGE_DATA_SIZE);
+                uint16_t lhs_start = lhs.first.get_offset();
+                uint16_t lhs_end = lhs_start + lhs.second;
+                uint16_t rhs_start = rhs.first.get_offset();
+
+                if (lhs.first.get_page_id() == rhs.first.get_page_id()) {
+
+                    if (!(lhs_end < rhs_start)) { fail = true; break; }
+                    assert(lhs_end < rhs_start);
+                } else {
+
+                    if (!(lhs.first.get_page_id() < rhs.first.get_page_id())) { fail = true; break; }
+                    assert(lhs.first.get_page_id() < rhs.first.get_page_id());
+                }
+
+                lhs = *it;
+                rhs = *(++it);
+            }
+            if (fail) throw std::exception();
+        }
+        catch (const std::exception &e)
+        {
+            dump_free_list();
+            assert(false);
+        }
+#endif
+        return total_size;
+    }
+
     template <typename T>
     std::pair<pinned_node_ptr<T>, tree_node_handle>
     create_new_tree_node( uint16_t node_size, NodeHandleType type_code ) {
         assert( node_size <= PAGE_DATA_SIZE );
 
+        validate_free_list();
         for( auto iter = free_list_.begin(); iter != free_list_.end();
                 iter++ ) {
             auto alloc_location = *iter;
@@ -310,7 +385,7 @@ public:
                         alloc_location.first.get_page_id(), new_offset,
                         type_code );
                 insert_to_free_list( std::make_pair( split_handle,
-                            remainder ) );
+                           remainder ) );
             }
 
             return std::make_pair( pinned_node_ptr( buffer_pool_,
@@ -338,6 +413,8 @@ public:
     }
 
     void free( tree_node_handle handle, uint16_t alloc_size ) {
+
+        validate_free_list();
 #ifndef NDEBUG
         if( handle.get_type() == 1 ) {
             assert( alloc_size == 176 );
@@ -360,6 +437,7 @@ public:
             assert( entry.first != node_ptr );
         }
 #endif
+        validate_free_list();
         page *page_ptr = buffer_pool_.get_page( node_ptr.get_page_id() );
         assert( page_ptr != nullptr );
         T *obj_ptr = (T *) (page_ptr->data_ + node_ptr.get_offset() );
