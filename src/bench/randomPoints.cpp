@@ -269,7 +269,7 @@ static Rectangle *generateCaliRectangles()
 
 	// Setup file reader and double buffer
 	std::fstream file;
-	std::string dataPath = "/home/bjglasbe/Documents/code/nir-tree/data/rea02.2";
+	std::string dataPath = "/Users/sergiupocol/Desktop/URA/FORKED/nir-tree/data/rea02.1";
 	file.open(dataPath);
 	fileGoodOrDie(file);
 	char *buffer = new char[sizeof(double)];
@@ -504,6 +504,7 @@ static void runBench(PointGenerator<T> &pointGen, std::map<std::string, unsigned
 
 	// Initialize the index
 	Index *spatialIndex;
+	tree_node_allocator *allocator = nullptr;
 	if (configU["tree"] == R_TREE)
 	{
 		//spatialIndex = new rtree::RTree(configU["minfanout"], configU["maxfanout"]);
@@ -526,9 +527,11 @@ static void runBench(PointGenerator<T> &pointGen, std::map<std::string, unsigned
 	{
 		//spatialIndex = new nirtree::NIRTree(configU["minfanout"], configU["maxfanout"]);
 		//spatialIndex = new nirtree::NIRTree(3,7);
-		spatialIndex = new
+		auto nir_tree = new
             nirtreedisk::NIRTreeDisk<3,7,nirtreedisk::ExperimentalStrategy>(
                 4096*10*13000, "nirdiskbacked_california.txt");
+		spatialIndex = nir_tree;
+		allocator = &(nir_tree->node_allocator_);
 	}
 	else if (configU["tree"] == QUAD_TREE)
 	{
@@ -596,6 +599,9 @@ static void runBench(PointGenerator<T> &pointGen, std::map<std::string, unsigned
         // If we read stuff from disk and don't need to reinsert, skip this.
         // Insert points and time their insertion
         std::cout << "Inserting Points." << std::endl;
+		if (!allocator) {
+			std::cout << "NOTE: Allocation metrics will not be printed" << std::endl;
+		}
         while((nextPoint = pointGen.nextPoint()) /* Intentional = and not == */)
         {
             // Compute the checksum directly
@@ -619,6 +625,13 @@ static void runBench(PointGenerator<T> &pointGen, std::map<std::string, unsigned
             // std::cout << "Point[" << totalInserts << "] inserted. " << delta.count() << "s" << std::endl;
         }
         std::cout << "Insertion OK." << std::endl;
+		if (allocator) {
+			allocator->print_metrics();
+			int total_freed_size = allocator->get_free_list_size();
+			int free_list_length = allocator->get_free_list_length();
+
+			std::cout << "Free list size (memory): " << total_freed_size << ", length: " << free_list_length << std::endl;
+		}
 
         // Validate checksum
         /*

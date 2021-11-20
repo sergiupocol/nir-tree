@@ -81,7 +81,7 @@ namespace BenchTypeClasses
 			static constexpr unsigned size = CaliforniaDataSize;
 			static constexpr unsigned querySize = CaliforniaQuerySize;
 			static constexpr unsigned dimensions = 2;
-			static constexpr char fileName[] = "/home/bjglasbe/Documents/code/nir-tree/data/california";
+			static constexpr char fileName[] = "/Users/sergiupocol/Desktop/URA/FORKED/nir-tree/data/california";
 	};
 
 	class Biological: public Benchmark

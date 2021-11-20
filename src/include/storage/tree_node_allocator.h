@@ -9,6 +9,7 @@
 #include <list>
 #include <cstdint>
 #include <limits>
+#include <chrono>
 
 template <typename T>
 class pinned_node_ptr {
@@ -222,7 +223,7 @@ public:
         // First, check if we can merge this block with an already freed one
         // If we can, modify an entry in the list
         // Otherwise iter will point to the node after which we must insert
-        uint16_t initial_size = validate_free_list();
+        uint32_t initial_size = validate_free_list();
         if (!free_block.first) return;
         if (get_free_list_length() == 0) {
             free_list_.push_back(free_block);
@@ -294,7 +295,7 @@ public:
 
         // Since we reached this point, free_block will be a standalone entry in the free_list
         free_list_.insert(iter, free_block);
-        uint16_t final_size = validate_free_list();
+        uint32_t final_size = validate_free_list();
         assert(initial_size + free_block.second == final_size);
     }
 
@@ -304,8 +305,22 @@ public:
         return create_new_tree_node<T>( sizeof( T ), type_code );
     }
 
-    int validate_free_list() const {
+    void print_metrics() const {
+        std::cout << "Alloc count: " << alloc_count << ", total alloc time: " << total_alloc_time << std::endl;
+        std::cout << "\t\tAVG: " << (total_alloc_time / double(alloc_count)) << std::endl;
+
+        std::cout << "Free count: " << free_count << ", total free time: " << total_free_time << std::endl;
+        std::cout << "\t\tAVG: " << (total_free_time / double(free_count)) << std::endl;
+    }
+
+    uint16_t get_free_list_size() const {
         uint16_t total_size = 0;
+        for (auto entry : free_list_) total_size += entry.second;
+        return total_size;
+    }
+
+    uint32_t validate_free_list() const {
+        uint32_t total_size = 0;
 #ifndef NDEBUG
         if (get_free_list_length() == 0) return 0;
 
@@ -354,6 +369,9 @@ public:
     std::pair<pinned_node_ptr<T>, tree_node_handle>
     create_new_tree_node( uint16_t node_size, NodeHandleType type_code ) {
         assert( node_size <= PAGE_DATA_SIZE );
+        alloc_count += 1;
+        std::chrono::high_resolution_clock::time_point begin = std::chrono::high_resolution_clock::now();
+
 
         validate_free_list();
         for( auto iter = free_list_.begin(); iter != free_list_.end();
@@ -378,7 +396,7 @@ public:
             // Can't use that symbol here because it would be recursive
             // includes. So instead I static assert it in that file and
             // use the constant here.
-            if( remainder > 0 ) {
+            if( remainder > 273 ) {
                 uint16_t new_offset = alloc_location.first.get_offset() +
                     node_size;
                 tree_node_handle split_handle(
@@ -387,6 +405,10 @@ public:
                 insert_to_free_list( std::make_pair( split_handle,
                            remainder ) );
             }
+
+            std::chrono::high_resolution_clock::time_point end = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> delta = std::chrono::duration_cast<std::chrono::duration<double>>(end - begin);
+            total_alloc_time += delta.count();
 
             return std::make_pair( pinned_node_ptr( buffer_pool_,
                         obj_ptr, page_ptr ), alloc_location.first );
@@ -397,6 +419,10 @@ public:
         // Fall through, need new location
         page *page_ptr = get_page_to_alloc_on( node_size );
         if( page_ptr == nullptr ) {
+            std::chrono::high_resolution_clock::time_point end = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> delta = std::chrono::duration_cast<std::chrono::duration<double>>(end - begin);
+            total_alloc_time += delta.count();
+
             return std::make_pair( pinned_node_ptr( buffer_pool_,
                         static_cast<T *>( nullptr ), static_cast<page *>(
                             nullptr ) ), tree_node_handle() );
@@ -408,11 +434,18 @@ public:
         tree_node_handle meta_ptr( page_ptr->header_.page_id_,
                 offset_into_page, type_code );
         
+
+        std::chrono::high_resolution_clock::time_point end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> delta = std::chrono::duration_cast<std::chrono::duration<double>>(end - begin);
+        total_alloc_time += delta.count();
+
         return std::make_pair( pinned_node_ptr( buffer_pool_, obj_ptr,
                     page_ptr ), std::move(meta_ptr) );
     }
 
     void free( tree_node_handle handle, uint16_t alloc_size ) {
+        free_count += 1;
+        std::chrono::high_resolution_clock::time_point begin = std::chrono::high_resolution_clock::now();
 
         validate_free_list();
 #ifndef NDEBUG
@@ -424,6 +457,10 @@ public:
 #endif
         if (!handle) return;
         insert_to_free_list( std::make_pair( handle, alloc_size ) );
+        std::chrono::high_resolution_clock::time_point end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> delta = std::chrono::duration_cast<std::chrono::duration<double>>(end - begin);
+        total_free_time += delta.count();
+
     }
 
     template <typename T>
@@ -447,6 +484,11 @@ public:
     buffer_pool buffer_pool_;
 
 protected:
+    int alloc_count = 0;
+    int free_count = 0;
+    double total_alloc_time = 0;
+    double total_free_time = 0;
+
     page *get_page_to_alloc_on( uint16_t object_size );
 
     uint16_t space_left_in_cur_page_;

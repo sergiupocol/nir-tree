@@ -25,7 +25,7 @@ page *tree_node_allocator::get_page_to_alloc_on( uint16_t object_size ) {
     } else {
         size_t remainder = space_left_in_cur_page_;
 
-        if (remainder > 0) {
+        if (remainder > 273) {
 
             uint16_t offset_into_page = (PAGE_DATA_SIZE - space_left_in_cur_page_);
             tree_node_handle split_handle(

@@ -499,12 +499,12 @@ SplitResult LEAF_NODE_CLASS_TYPES::adjustTree()
         std::pair<SplitResult, tree_node_handle>
             split_res_and_new_handle;
         if( current_handle.get_type() == LEAF_NODE ) {
-            auto current_leaf_node = treeRef->get_leaf_node(
+            auto current_leaf_node = tree_ref_backup->get_leaf_node(
                     current_handle );
             split_res_and_new_handle = adjust_tree_bottom_half(
                     current_leaf_node, tree_ref_backup, max_branch_factor );
         } else {
-            auto current_branch_node = treeRef->get_branch_node(
+            auto current_branch_node = tree_ref_backup->get_branch_node(
                     current_handle );
             split_res_and_new_handle = adjust_tree_bottom_half(
                     current_branch_node, tree_ref_backup,
